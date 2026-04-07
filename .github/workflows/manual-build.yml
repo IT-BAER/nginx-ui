@@ -1,0 +1,27 @@
+name: Manual Build
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 18
+    - run: npm install -g pnpm
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+    - name: Build Frontend
+      run: |
+        cd app
+        pnpm install
+        pnpm build
+    - name: Build Backend
+      run: |
+        GOOS=linux GOARCH=amd64 go build -o nginx-ui -trimpath -ldflags "-s -w -buildid=" main.go
+    - uses: actions/upload-artifact@v4
+      with:
+        name: nginx-ui-linux-amd64
+        path: nginx-ui
