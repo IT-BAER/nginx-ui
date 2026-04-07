@@ -94,6 +94,35 @@ loadTranslations(route)
     &.ant-layout-sider-has-trigger {
       padding-bottom: 0;
     }
+
+    // Minimalistic dark scrollbar for sidebar
+    .sidebar::-webkit-scrollbar,
+    .ant-menu::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .sidebar::-webkit-scrollbar-track,
+    .ant-menu::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb,
+    .ant-menu::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 2px;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb:hover,
+    .ant-menu::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    /* Firefox */
+    .sidebar,
+    .ant-menu {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
   }
 
   // 暗夜模式滚动条样式
