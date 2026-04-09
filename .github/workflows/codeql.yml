@@ -13,15 +13,11 @@
 name: "CodeQL"
 
 on:
-  push:
-    branches: [ "dev" ]
-  pull_request:
-    branches: [ "dev" ]
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.ini'
+  # Deep CodeQL scanning runs on schedule only (daily).
+  # Fast quality checks for push/PR are in code-quality.yml.
   schedule:
     - cron: '34 6 * * *'
+  workflow_dispatch:
 
 jobs:
   analyze:

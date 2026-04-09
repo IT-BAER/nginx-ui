@@ -1,0 +1,31 @@
+run:
+  timeout: 4m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - gosec          # Security scanner
+    - govet          # Go vet checks
+    - staticcheck    # Advanced static analysis
+    - ineffassign    # Detect ineffectual assignments
+    - unused         # Check for unused code
+    - errcheck       # Check for unchecked errors
+    - bodyclose      # Check HTTP response body is closed
+    - sqlclosecheck  # Check sql.Rows/Stmt are closed
+
+linters-settings:
+  gosec:
+    excludes:
+      # MD5 is used for AES key derivation, not password hashing
+      - G401
+      # SHA1 is required by TOTP/HOTP spec (RFC 6238)
+      - G505
+    severity: medium
+    confidence: medium
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5
+  exclude-dirs:
+    - query       # Generated code
+    - resources   # Embedded resources
