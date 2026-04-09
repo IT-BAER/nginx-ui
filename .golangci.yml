@@ -3,6 +3,8 @@ version: "2"
 run:
   timeout: 4m
   modules-download-mode: readonly
+  build-tags:
+    - unembed
 
 linters:
   default: none
