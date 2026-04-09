@@ -28,10 +28,9 @@ jobs:
           pnpm run build || true
           
       - name: Go Security Checker (gosec)
-        uses: securego/gosec@master
-        with:
-          args: -exclude=G104,G304,G204,G114,G115 -tests=false ./...
-          
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          $(go env GOPATH)/bin/gosec -exclude=G104,G304,G204,G114,G115 -tests=false ./...
   build-and-release:
     needs: security-and-quality
     runs-on: ubuntu-latest
