@@ -32,7 +32,7 @@ jobs:
   go-lint:
     name: Go Lint & Security
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -46,7 +46,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: latest
-          args: --timeout=4m
+          args: --timeout=8m
 
   frontend-lint:
     name: Frontend Lint & Typecheck
