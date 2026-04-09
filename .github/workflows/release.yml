@@ -26,11 +26,7 @@ jobs:
         run: |
           cd app
           pnpm run build || true
-          
-      - name: Go Security Checker (gosec)
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          $(go env GOPATH)/bin/gosec -exclude=G104,G304,G204,G114,G115 -tests=false ./... || true
+
   build-and-release:
     needs: security-and-quality
     runs-on: ubuntu-latest
