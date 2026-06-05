@@ -1,5 +1,7 @@
 import { http } from '@uozi-admin/request'
 
+export const PROTECTED_VALUE_PLACEHOLDER = '__NGINX_UI_REDACTED__'
+
 export interface AppSettings {
   page_size: number
   jwt_secret: string
@@ -68,6 +70,7 @@ export interface NginxSettings {
   restart_cmd: string
   stub_status_port: number
   container_name: string
+  maintenance_template?: string
 }
 
 export interface NginxLogSettings {
@@ -85,6 +88,7 @@ export interface NodeSettings {
 }
 
 export interface OpenaiSettings {
+  provider: string
   model: string
   base_url: string
   proxy: string
@@ -140,6 +144,11 @@ export interface Settings {
 const settings = {
   get(): Promise<Settings> {
     return http.get('/settings')
+  },
+  get_protected_value(path: string): Promise<{ value: string }> {
+    return http.get('/settings/protected', {
+      params: { path },
+    })
   },
   save(data: Settings) {
     return http.post('/settings', data)
