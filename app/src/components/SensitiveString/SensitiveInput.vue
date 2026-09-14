@@ -3,8 +3,11 @@ import settings, { PROTECTED_VALUE_PLACEHOLDER } from '@/api/settings'
 import { use2FAModal } from '@/components/TwoFA'
 
 const props = defineProps<{
-  path: string
+  /** Protected settings path to reveal from. Ignored when `resolve` is given. */
+  path?: string
   placeholder?: string
+  /** Reveals a value that does not live in settings, such as a node's secret. */
+  resolve?: () => Promise<string>
 }>()
 
 const model = defineModel<string>({ required: true })
@@ -39,7 +42,9 @@ async function ensureRevealedValue() {
   isLoading.value = true
   try {
     await twoFAModal.open()
-    const { value } = await settings.get_protected_value(props.path)
+    const value = props.resolve
+      ? await props.resolve()
+      : (await settings.get_protected_value(props.path!)).value
     revealedValue.value = value
     model.value = value
     return value
@@ -77,6 +82,7 @@ function updateValue(value: string) {
       :readonly="!show"
       :type="show ? 'text' : 'text'"
       :placeholder="placeholder"
+      :classes="{ root: 'sensitive-input-root', input: 'sensitive-input-input' }"
       @update:value="updateValue"
     >
       <template #suffix>
@@ -100,14 +106,14 @@ function updateValue(value: string) {
   border-radius: 10px;
 
   &.is-protected {
-    :deep(.ant-input) {
+    :deep(.sensitive-input-input) {
       color: transparent;
       text-shadow: 0 0 8px rgba(15, 23, 42, 0.72);
       user-select: none;
       cursor: not-allowed;
       caret-color: transparent;
     }
-    :deep(.ant-input-affix-wrapper) {
+    :deep(.sensitive-input-root) {
       background: rgba(148, 163, 184, 0.10);
       border-color: rgba(148, 163, 184, 0.32);
     }
@@ -116,7 +122,7 @@ function updateValue(value: string) {
 
 .dark .sensitive-input-shell {
   &.is-protected {
-    :deep(.ant-input) {
+    :deep(.sensitive-input-input) {
       text-shadow: 0 0 8px rgba(226, 232, 240, 0.75);
     }
   }
@@ -125,7 +131,7 @@ function updateValue(value: string) {
 @media (prefers-color-scheme: dark) {
   .sensitive-input-shell {
     &.is-protected {
-      :deep(.ant-input) {
+      :deep(.sensitive-input-input) {
         text-shadow: 0 0 8px rgba(226, 232, 240, 0.75);
       }
     }

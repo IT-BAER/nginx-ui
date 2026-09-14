@@ -11,6 +11,9 @@ const { data, errors } = storeToRefs(systemSettingsStore)
     <AFormItem :label="$gettext('Node Secret')">
       <SensitiveString path="node.secret" :value="data.node.secret" />
     </AFormItem>
+    <AFormItem :label="$gettext('Instance ID')">
+      <AInput :value="data.node.instance_id" readonly />
+    </AFormItem>
     <AFormItem
       :label="$gettext('Node name')"
       :validate-status="errors?.node?.name ? 'error' : ''"

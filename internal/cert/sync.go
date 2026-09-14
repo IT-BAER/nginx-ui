@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 
 	"github.com/0xJacky/Nginx-UI/internal/helper"
 	"github.com/0xJacky/Nginx-UI/internal/nginx"
+	"github.com/0xJacky/Nginx-UI/internal/nodeauth"
 	"github.com/0xJacky/Nginx-UI/internal/notification"
-	"github.com/0xJacky/Nginx-UI/internal/transport"
 	"github.com/0xJacky/Nginx-UI/model"
 	"github.com/0xJacky/Nginx-UI/query"
 	"github.com/go-acme/lego/v5/certcrypto"
@@ -40,11 +39,11 @@ func SyncToRemoteServer(c *model.Cert) (err error) {
 		return e.NewWithParams(50006, ErrPathIsNotUnderTheNginxConfDir.Error(), c.SSLCertificateKeyPath, nginxConfPath)
 	}
 
-	certBytes, err := os.ReadFile(c.SSLCertificatePath)
+	certBytes, err := nginx.ReadFile(c.SSLCertificatePath)
 	if err != nil {
 		return
 	}
-	keyBytes, err := os.ReadFile(c.SSLCertificateKeyPath)
+	keyBytes, err := nginx.ReadFile(c.SSLCertificateKeyPath)
 	if err != nil {
 		return
 	}
@@ -85,12 +84,9 @@ type SyncNotificationPayload struct {
 }
 
 func deploy(node *model.Node, c *model.Cert, payloadBytes []byte) (err error) {
-	t, err := transport.NewTransport()
+	client, err := nodeauth.NewHTTPClient(node, 0)
 	if err != nil {
 		return
-	}
-	client := http.Client{
-		Transport: t,
 	}
 	url, err := node.GetUrl("/api/cert_sync")
 	if err != nil {
@@ -100,7 +96,6 @@ func deploy(node *model.Node, c *model.Cert, payloadBytes []byte) (err error) {
 	if err != nil {
 		return
 	}
-	req.Header.Set("X-Node-Secret", node.Token)
 	resp, err := client.Do(req)
 	if err != nil {
 		return

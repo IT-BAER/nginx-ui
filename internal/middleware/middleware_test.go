@@ -2,10 +2,13 @@ package middleware
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"testing"
 
+	"github.com/0xJacky/Nginx-UI/settings"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetTokenWS_NoCookieFallback(t *testing.T) {
@@ -59,12 +62,62 @@ func TestGetTokenWS_NoCookieFallback(t *testing.T) {
 	})
 }
 
-func TestGetToken_IncludesCookieFallback(t *testing.T) {
-	t.Run("reads from cookie when no header or query", func(t *testing.T) {
+func TestGetToken_RequiresAuthorizationHeader(t *testing.T) {
+	t.Run("reads from Authorization header", func(t *testing.T) {
+		c := newTestGinContext(t, "GET", "/api/test", nil)
+		c.Request.Header.Set("Authorization", "jwt-token-here")
+
+		token := getToken(c)
+		assert.Equal(t, "jwt-token-here", token)
+	})
+
+	t.Run("does not read from cookie", func(t *testing.T) {
 		c := newTestGinContext(t, "GET", "/api/test", nil)
 		c.Request.AddCookie(&http.Cookie{Name: "token", Value: "cookie-jwt-token"})
 
 		token := getToken(c)
-		assert.Equal(t, "cookie-jwt-token", token)
+		assert.Empty(t, token)
 	})
+
+	t.Run("does not read from query", func(t *testing.T) {
+		encoded := base64.StdEncoding.EncodeToString([]byte("jwt-token-here"))
+		c := newTestGinContext(t, "GET", "/api/test?token="+encoded, nil)
+
+		token := getToken(c)
+		assert.Empty(t, token)
+	})
+}
+
+func TestAuthenticateNodeRequestRejectsQuerySecretEvenWhenItMatches(t *testing.T) {
+	originalSecret := settings.NodeSettings.Secret
+	t.Cleanup(func() {
+		settings.NodeSettings.Secret = originalSecret
+	})
+	settings.NodeSettings.Secret = "matching-legacy-secret"
+
+	c := newTestGinContext(t, "GET", "/api/node?node_secret=matching-legacy-secret", nil)
+	handled, err := authenticateNodeRequest(c)
+
+	require.Error(t, err)
+	assert.True(t, handled)
+	assert.ErrorContains(t, err, "query parameters")
+}
+
+func TestNodeAuthenticationFailureLogExcludesCredentials(t *testing.T) {
+	const secret = "must-not-appear-in-node-authentication-log"
+	c := newTestGinContext(t, http.MethodGet, "/api/node?node_secret="+secret, nil)
+	c.Request.RemoteAddr = "192.0.2.10:54321"
+	c.Request.Header.Set("Signature", secret)
+	c.Request.Header.Set("Signature-Input", secret)
+	c.Request.Header.Set("X-Node-Secret", secret)
+
+	failure := newNodeAuthenticationFailureLog(c, "signature", errors.New("node signature is expired"))
+
+	assert.Equal(t, "signature", failure.CredentialType)
+	assert.Equal(t, http.MethodGet, failure.Method)
+	assert.Equal(t, "/api/node", failure.Path)
+	assert.Equal(t, "192.0.2.10", failure.RemoteIP)
+	assert.Equal(t, "node signature is expired", failure.Reason)
+	assert.NotContains(t, failure.Path, secret)
+	assert.NotContains(t, failure.Reason, secret)
 }

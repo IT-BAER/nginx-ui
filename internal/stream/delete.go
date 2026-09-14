@@ -3,14 +3,13 @@ package stream
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"runtime"
 
-	"github.com/0xJacky/Nginx-UI/internal/helper"
+	"github.com/0xJacky/Nginx-UI/internal/nginx"
+	"github.com/0xJacky/Nginx-UI/internal/nodeauth"
 	"github.com/0xJacky/Nginx-UI/internal/notification"
 	"github.com/0xJacky/Nginx-UI/model"
 	"github.com/0xJacky/Nginx-UI/query"
-	"github.com/go-resty/resty/v2"
 	"github.com/uozi-tech/cosy/logger"
 )
 
@@ -21,10 +20,21 @@ func Delete(name string) (err error) {
 		return err
 	}
 
+	s := query.Stream
+
+	// Remote namespaces keep the enablement flag in the database, so refuse the
+	// deletion the same way an enabled local stream is refused.
+	remoteDeploy := IsRemoteDeploy(name)
+	if remoteDeploy {
+		streamModel, err := s.Where(s.Path.Eq(availablePath)).First()
+		if err == nil && streamModel.RemoteEnabled {
+			return ErrStreamIsEnabled
+		}
+	}
+
 	syncDelete(name)
 
-	s := query.Site
-	_, err = s.Where(s.Path.Eq(availablePath)).Unscoped().Delete(&model.Site{})
+	_, err = s.Where(s.Path.Eq(availablePath)).Unscoped().Delete(&model.Stream{})
 	if err != nil {
 		return
 	}
@@ -34,18 +44,29 @@ func Delete(name string) (err error) {
 		return err
 	}
 
-	if !helper.FileExists(availablePath) {
+	availableExists, err := nginx.Exists(availablePath)
+	if err != nil {
+		return err
+	}
+	if !availableExists {
 		return ErrStreamNotFound
 	}
 
-	if helper.FileExists(enabledPath) {
-		return ErrStreamIsEnabled
+	if !remoteDeploy {
+		var enabledExists bool
+		enabledExists, err = nginx.Exists(enabledPath)
+		if err != nil {
+			return err
+		}
+		if enabledExists {
+			return ErrStreamIsEnabled
+		}
 	}
 
 	certModel := model.Cert{Filename: name}
 	_ = certModel.Remove()
 
-	err = os.Remove(availablePath)
+	err = nginx.Remove(availablePath)
 	if err != nil {
 		return
 	}
@@ -65,10 +86,9 @@ func syncDelete(name string) {
 					logger.Errorf("%s\n%s", err, buf)
 				}
 			}()
-			client := resty.New()
+			client := nodeauth.NewRestyClient(node)
 			client.SetBaseURL(node.URL)
 			resp, err := client.R().
-				SetHeader("X-Node-Secret", node.Token).
 				Delete(fmt.Sprintf("/api/streams/%s", name))
 			if err != nil {
 				notification.Error("Delete Remote Stream Error", err.Error(), nil)

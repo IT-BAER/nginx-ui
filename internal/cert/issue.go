@@ -26,6 +26,8 @@ import (
 const (
 	HTTP01 = "http01"
 	DNS01  = "dns01"
+
+	disabledAuthoritativeNSPropagationWait = time.Minute
 )
 
 func IssueCert(payload *ConfigPayload, certLogger *Logger) error {
@@ -39,6 +41,9 @@ func IssueCert(payload *ConfigPayload, certLogger *Logger) error {
 		}
 	}()
 	payload.KeyType = payload.GetKeyType()
+	if err := NormalizeAndValidateIdentifiers(payload); err != nil {
+		return err
+	}
 
 	// initial a channelWriter to receive logs
 	cw := NewChannelWriter()
@@ -91,6 +96,9 @@ func IssueCert(payload *ConfigPayload, certLogger *Logger) error {
 	if err != nil {
 		return cosy.WrapErrorWithParams(ErrNewLegoClient, err.Error())
 	}
+	if err = resolveCertificateProfile(payload, client.GetServerMetadata().Profiles); err != nil {
+		return err
+	}
 
 	switch payload.ChallengeMethod {
 	default:
@@ -137,7 +145,17 @@ func IssueCert(payload *ConfigPayload, certLogger *Logger) error {
 				defer dns01.SetDefaultClient(oldDNSClient)
 			}
 
-			err = client.Challenge.SetDNS01Provider(provider)
+			// lego v5 enabled the recursive-nameserver propagation check by
+			// default, which queries the local system resolver for the
+			// _acme-challenge TXT record. Split-horizon or private resolvers
+			// (systemd-resolved at 127.0.0.53, Unbound, Docker DNS, etc.)
+			// frequently REFUSE these queries, so DNS-01 issuance/renewal that
+			// worked under lego v4 started timing out after the v5 migration.
+			// Default to the v4 behavior by only requiring propagation to the
+			// authoritative nameservers. A per-certificate option can also skip
+			// that local pre-check when the authoritative path is unreliable.
+			// Fixes #1711, #1719.
+			err = client.Challenge.SetDNS01Provider(provider, dns01ChallengeOptions(payload)...)
 		} else {
 			return ErrEnvironmentConfigurationIsEmpty
 		}
@@ -170,7 +188,8 @@ func IssueCert(payload *ConfigPayload, certLogger *Logger) error {
 		}
 	}
 
-	if time.Since(payload.NotBefore).Hours()/24 <= 21 &&
+	if canUseLegoRenew(payload) &&
+		time.Since(payload.NotBefore).Hours()/24 <= 21 &&
 		payload.Resource != nil && payload.Resource.Certificate != nil {
 		err = renew(payload, client, certLogger)
 		if err != nil {
@@ -220,4 +239,35 @@ func IssueCert(payload *ConfigPayload, certLogger *Logger) error {
 	time.Sleep(2 * time.Second)
 
 	return nil
+}
+
+func dns01ChallengeOptions(payload *ConfigPayload) []dns01.ChallengeOption {
+	if wait := dns01PropagationWait(payload); wait > 0 {
+		// No active propagation check remains in this mode, so wait before
+		// asking the ACME server to validate the newly published TXT record.
+		return []dns01.ChallengeOption{
+			dns01.PropagationWait(wait, true),
+		}
+	}
+
+	return []dns01.ChallengeOption{
+		dns01.DisableRecursiveNSsPropagationRequirement(),
+	}
+}
+
+func dns01PropagationWait(payload *ConfigPayload) time.Duration {
+	if payload != nil && payload.DisableAuthoritativeNSPropagation {
+		return disabledAuthoritativeNSPropagationWait
+	}
+	return 0
+}
+
+func canUseLegoRenew(payload *ConfigPayload) bool {
+	if payload == nil {
+		return true
+	}
+
+	// lego.RenewOptions does not expose EnableCommonName or ReplacesCertID,
+	// so use the obtain flow when either option is required.
+	return !payload.EnableCommonName && payload.ReplacesCertID == ""
 }

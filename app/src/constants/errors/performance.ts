@@ -4,6 +4,7 @@ export default {
   51002: () => $gettext('Failed to read response body: {0}'),
   51003: () => $gettext('Failed to parse template: {0}'),
   51004: () => $gettext('Failed to execute template: {0}'),
+  51008: () => $gettext('Nginx process information is not available when nginx runs on an SSH host'),
   51005: () => $gettext('Failed to parse nginx config: {0}'),
   51006: () => $gettext('Failed to build nginx config: {0}'),
   51007: () => $gettext('Failed to get nginx.conf path'),

@@ -1,16 +1,25 @@
 import type { RouteRecordRaw } from 'vue-router'
-import { HomeOutlined } from '@ant-design/icons-vue'
+import { HomeOutlined } from '@antdv-next/icons'
 
 export const dashboardRoutes: RouteRecordRaw[] = [
   {
     path: 'dashboard',
-    redirect: '/dashboard/server',
+    component: () => import('@/layouts/BaseRouterView.vue'),
     name: 'Dashboard',
     meta: {
       name: () => $gettext('Dashboard'),
       icon: HomeOutlined,
     },
     children: [
+      {
+        path: '',
+        component: () => import('@/views/dashboard/index.vue'),
+        name: 'Dashboard Home',
+        meta: {
+          name: () => $gettext('Dashboard'),
+          hiddenInSidebar: true,
+        },
+      },
       {
         path: 'server',
         component: () => import('@/views/dashboard/ServerDashBoard.vue'),

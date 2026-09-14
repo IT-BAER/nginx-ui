@@ -15,6 +15,7 @@ import (
 	"github.com/0xJacky/Nginx-UI/internal/cache"
 	internalconfig "github.com/0xJacky/Nginx-UI/internal/config"
 	"github.com/0xJacky/Nginx-UI/internal/middleware"
+	"github.com/0xJacky/Nginx-UI/internal/nodeauth"
 	internaluser "github.com/0xJacky/Nginx-UI/internal/user"
 	"github.com/0xJacky/Nginx-UI/model"
 	"github.com/0xJacky/Nginx-UI/query"
@@ -225,8 +226,13 @@ func TestAddConfigAllowsNonOTPUserAndNodeSecret(t *testing.T) {
 
 	nodeRouter := gin.New()
 	nodeRouter.POST("/configs", func(c *gin.Context) {
-		c.Set("user", &model.User{Model: model.Model{ID: 1}, Name: "node-sync", Status: true})
-		c.Set("Secret", "node-secret")
+		c.Set("user", &model.User{
+			Model:     model.Model{ID: 1},
+			Name:      "node-sync",
+			Status:    true,
+			OTPSecret: []byte("otp-enabled"),
+		})
+		c.Set(nodeauth.GinPrincipalKey, &nodeauth.Principal{AuthMethod: model.NodeAuthMethodLegacy})
 		c.Next()
 	}, middleware.RequireSecureSession(), AddConfig)
 

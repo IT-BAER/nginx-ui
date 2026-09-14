@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DeleteOutlined, HolderOutlined } from '@ant-design/icons-vue'
+import { DeleteOutlined, HolderOutlined } from '@antdv-next/icons'
 import Draggable from 'vuedraggable'
 import { CA_SERVER_OPTIONS } from '@/constants/acme'
 import useSystemSettingsStore from '../store'
@@ -30,12 +30,15 @@ const { data, errors } = storeToRefs(systemSettingsStore)
         allow-clear
       />
     </AFormItem>
-    <AFormItem :label="$gettext('Certificate Renewal Interval')">
+    <AFormItem
+      :label="$gettext('Certificate Renewal Threshold')"
+      :help="$gettext('Renew certificates when their remaining validity is less than or equal to this value.')"
+    >
       <AInputNumber
         v-model:value="data.cert.renewal_interval"
-        :min="7"
-        :max="21"
-        :addon-after="$gettext('Days')"
+        :min="1"
+        :max="90"
+        :suffix="$gettext('Days')"
       />
     </AFormItem>
     <AFormItem

@@ -27,7 +27,7 @@ func GetStreamInfo(name string) (*Info, error) {
 		return nil, err
 	}
 
-	fileInfo, err := os.Stat(path)
+	fileInfo, err := nginx.Stat(path)
 	if os.IsNotExist(err) {
 		return nil, ErrStreamNotFound
 	}
@@ -42,19 +42,25 @@ func GetStreamInfo(name string) (*Info, error) {
 		return nil, err
 	}
 
-	if _, err := os.Stat(enabledPath); os.IsNotExist(err) {
+	if _, err := nginx.Stat(enabledPath); os.IsNotExist(err) {
 		status = config.StatusDisabled
 	}
 
 	// Retrieve or create stream model from database
 	s := query.Stream
-	streamModel, err := s.Where(s.Path.Eq(path)).FirstOrCreate()
+	streamModel, err := s.Where(s.Path.Eq(path)).Preload(s.Namespace).FirstOrCreate()
 	if err != nil {
 		return nil, err
 	}
 
+	// Remote namespaces never create a local symlink, their state lives in the
+	// database instead.
+	if streamModel.Namespace.IsRemoteDeploy() {
+		status = remoteStatus(streamModel.RemoteEnabled)
+	}
+
 	// Read raw content
-	rawContent, err := os.ReadFile(path)
+	rawContent, err := nginx.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

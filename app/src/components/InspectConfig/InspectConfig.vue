@@ -4,6 +4,7 @@ import type { CosyError } from '@/lib/http/types'
 import ngx from '@/api/ngx'
 import { logLevel } from '@/constants/config'
 import { translateError } from '@/lib/http/error'
+import { getInspectAlertKind } from './alert'
 
 const props = defineProps<{
   banner?: boolean
@@ -11,16 +12,23 @@ const props = defineProps<{
 }>()
 
 interface TestResult extends NgxTestResult {
-  code?: string
+  code?: CosyError['code']
   scope?: string
   params?: string[]
 }
 
 const data = ref<TestResult>()
 const translatedError = ref<string>('')
+const requestError = ref<string>('')
 const testLoading = ref(false)
 
+const alertKind = computed(() => getInspectAlertKind(data.value, Boolean(requestError.value), logLevel.Warn))
+
 const statusMessage = computed(() => {
+  if (data.value?.level !== undefined && data.value.level > logLevel.Warn) {
+    return $gettext('Nginx configuration test failed')
+  }
+
   switch (data.value?.sandbox_status) {
     case 'skipped':
       return $gettext('Sandbox validation skipped')
@@ -28,6 +36,19 @@ const statusMessage = computed(() => {
       return $gettext('Sandbox validation failed')
     default:
       return $gettext('Error')
+  }
+})
+
+const sandboxReasonMessage = computed(() => {
+  switch (data.value?.sandbox_reason) {
+    case 'remote_namespace':
+      return $gettext('Config validation is unavailable for a remote-only namespace.')
+    case 'separate_container':
+      return $gettext('Sandbox validation is unavailable when Nginx runs in a separate container.')
+    case 'custom_test_command':
+      return $gettext('Sandbox validation is unavailable because a custom test command is configured.')
+    default:
+      return ''
   }
 })
 
@@ -62,6 +83,7 @@ watch(() => props.namespaceId, () => {
 async function test() {
   testLoading.value = true
   translatedError.value = ''
+  requestError.value = ''
   const namespaceIdNum = props.namespaceId ? Number(props.namespaceId) : 0
 
   try {
@@ -80,13 +102,11 @@ async function test() {
     const cosyError = error as Partial<CosyError>
     const message = cosyError?.message ?? $gettext('Server error')
 
+    requestError.value = message
     data.value = {
       ...cosyError,
       message,
       level: logLevel.Error,
-      sandbox_status: namespaceIdNum > 0 ? 'failed' : undefined,
-      error_category: 'nginx_runtime_error',
-      test_scope: namespaceIdNum > 0 ? 'namespace_sandbox' : 'global',
     }
 
     if (cosyError?.code && cosyError?.scope) {
@@ -108,25 +128,44 @@ defineExpose({
     <AAlert
       v-if="testLoading"
       :banner
-      :message="$gettext('Testing Nginx configuration...')"
+      :title="$gettext('Testing Nginx configuration...')"
       type="info"
       show-icon
     />
     <AAlert
-      v-else-if="data?.sandbox_status === 'skipped'"
+      v-else-if="alertKind === 'request_error'"
       :banner
-      :message="$gettext('Sandbox validation skipped')"
+      :title="$gettext('Could not reach the server')"
+      type="error"
+      show-icon
+    >
+      <template #description>
+        <div v-if="translatedDetails">
+          {{ translatedDetails }}
+        </div>
+        <div>{{ requestError }}</div>
+      </template>
+    </AAlert>
+    <AAlert
+      v-else-if="alertKind === 'skipped'"
+      :banner
+      :title="$gettext('Sandbox validation skipped')"
       type="info"
       show-icon
     >
       <template #description>
-        {{ data?.message }}
+        <div v-if="sandboxReasonMessage">
+          {{ sandboxReasonMessage }}
+        </div>
+        <div v-if="data?.message">
+          {{ data.message }}
+        </div>
       </template>
     </AAlert>
     <AAlert
-      v-else-if="data?.sandbox_status === 'failed'"
+      v-else-if="alertKind === 'failed'"
       :banner
-      :message="$gettext('Sandbox validation failed')"
+      :title="$gettext('Sandbox validation failed')"
       type="error"
       show-icon
     >
@@ -143,17 +182,17 @@ defineExpose({
       </template>
     </AAlert>
     <AAlert
-      v-else-if="data && data.level <= logLevel.Info"
+      v-else-if="alertKind === 'success'"
       :banner
-      :message="namespaceId
+      :title="namespaceId
         ? $gettext('Configuration file is test successful in isolated sandbox')
         : $gettext('Configuration file is test successful')"
       type="success"
       show-icon
     />
     <AAlert
-      v-else-if="data?.level === logLevel.Warn"
-      :message="$gettext('Warning')"
+      v-else-if="alertKind === 'warning'"
+      :title="$gettext('Warning')"
       :banner
       type="warning"
       show-icon
@@ -164,8 +203,8 @@ defineExpose({
     </AAlert>
 
     <AAlert
-      v-else-if="data && data.level > logLevel.Warn"
-      :message="statusMessage"
+      v-else-if="alertKind === 'error'"
+      :title="statusMessage"
       :banner
       type="error"
       show-icon

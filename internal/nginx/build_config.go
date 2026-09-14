@@ -54,14 +54,17 @@ func (c *NgxConfig) BuildConfig() (content string, err error) {
 	for _, u := range c.Upstreams {
 
 		upstream := ""
-		var comments string
 		for _, directive := range u.Directives {
+			// Scope the comment to a single directive. Hoisting it out of the
+			// loop would re-emit the previous directive's comment on every
+			// following directive that has none.
+			var comments string
 			if directive.Comments != "" {
 				comments = buildComments(directive.Comments, 1)
 			}
 			upstream += fmt.Sprintf("%s\t%s;\n", comments, directive.Orig())
 		}
-		comments = buildComments(u.Comments, 1)
+		comments := buildComments(u.Comments, 1)
 		content += fmt.Sprintf("upstream %s {\n%s%s}\n\n", u.Name, comments, upstream)
 	}
 
@@ -74,6 +77,10 @@ func (c *NgxConfig) BuildConfig() (content string, err error) {
 			var comments string
 			if directive.Comments != "" {
 				comments = buildComments(directive.Comments, 1)
+			}
+			if directive.Raw != "" {
+				server += comments + indentRawDirective(directive.Raw, 1) + "\n"
+				continue
 			}
 			if directive.Params != "" {
 				server += fmt.Sprintf("%s\t%s;\n", comments, directive.Orig())
@@ -121,4 +128,20 @@ func (c *NgxConfig) BuildConfig() (content string, err error) {
 
 	content = dumper.DumpConfig(cfg, dumper.IndentedStyle)
 	return
+}
+
+func indentRawDirective(raw string, indent int) string {
+	indentation := strings.Repeat("\t", indent)
+	var builder strings.Builder
+
+	// Use strings.Split rather than bufio.Scanner: the latter caps a single line
+	// at MaxScanTokenSize (64 KiB) and would silently drop content for very long
+	// embedded blocks (e.g. lua blocks with long single lines).
+	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
+		builder.WriteString(indentation)
+		builder.WriteString(line)
+		builder.WriteByte('\n')
+	}
+
+	return strings.TrimRight(builder.String(), "\n")
 }

@@ -2,11 +2,15 @@ package sites
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/0xJacky/Nginx-UI/internal/cert"
+	"github.com/0xJacky/Nginx-UI/internal/clustersync"
 	"github.com/0xJacky/Nginx-UI/internal/dns"
 	"github.com/0xJacky/Nginx-UI/internal/helper"
 	"github.com/0xJacky/Nginx-UI/internal/nginx"
@@ -52,34 +56,98 @@ func buildProxyTargets(fileName string) []site.ProxyTarget {
 	return proxyTargets
 }
 
-// checkDNSRecordExists verifies if a linked DNS record still exists
-func checkDNSRecordExists(domainID int, recordID string) bool {
-	if domainID == 0 || recordID == "" {
-		return false
+// checkDNSRecordsExist verifies all linked records with a single provider request.
+func checkDNSRecordsExist(domainID int, records []model.SiteDNSRecord) []model.SiteDNSRecord {
+	checkedRecords := append([]model.SiteDNSRecord(nil), records...)
+	if domainID == 0 || len(checkedRecords) == 0 {
+		return checkedRecords
 	}
 
 	svc := dns.NewService()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	records, err := svc.ListRecords(ctx, uint64(domainID), dns.RecordListOptions{})
+	providerRecords, err := svc.ListRecords(ctx, uint64(domainID), dns.RecordListOptions{})
 	if err != nil {
 		logger.Warn("Failed to list DNS records:", err)
-		return false
+		return checkedRecords
 	}
 
-	// Check if recordID exists in the list
+	existingRecordIDs := make(map[string]struct{}, len(providerRecords))
+	for _, record := range providerRecords {
+		existingRecordIDs[record.ID] = struct{}{}
+	}
+	for i := range checkedRecords {
+		_, checkedRecords[i].Exists = existingRecordIDs[checkedRecords[i].ID]
+	}
+
+	return checkedRecords
+}
+
+func normalizeDNSRecords(records []model.SiteDNSRecord) []model.SiteDNSRecord {
+	normalizedRecords := make([]model.SiteDNSRecord, 0, len(records))
+	seenRecordIDs := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		if record.ID == recordID {
-			return true
+		record.ID = strings.TrimSpace(record.ID)
+		if record.ID == "" {
+			continue
 		}
+		if _, exists := seenRecordIDs[record.ID]; exists {
+			continue
+		}
+		seenRecordIDs[record.ID] = struct{}{}
+		normalizedRecords = append(normalizedRecords, record)
+	}
+	return normalizedRecords
+}
+
+func getSiteDNSRecords(siteModel *model.Site) []model.SiteDNSRecord {
+	if len(siteModel.DNSRecords) > 0 {
+		return normalizeDNSRecords(siteModel.DNSRecords)
+	}
+	if siteModel.DNSRecordID == nil || *siteModel.DNSRecordID == "" {
+		return nil
 	}
 
-	return false
+	record := model.SiteDNSRecord{ID: *siteModel.DNSRecordID}
+	if siteModel.DNSRecordName != nil {
+		record.Name = *siteModel.DNSRecordName
+	}
+	if siteModel.DNSRecordType != nil {
+		record.Type = *siteModel.DNSRecordType
+	}
+	if siteModel.DNSRecordExists != nil {
+		record.Exists = *siteModel.DNSRecordExists
+	}
+	return []model.SiteDNSRecord{record}
+}
+
+func setSiteDNSRecords(siteModel *model.Site, domainID *int, records []model.SiteDNSRecord) {
+	records = normalizeDNSRecords(records)
+	if domainID == nil || len(records) == 0 {
+		siteModel.DNSRecords = nil
+		siteModel.DNSDomainID = nil
+		siteModel.DNSRecordID = nil
+		siteModel.DNSRecordName = nil
+		siteModel.DNSRecordType = nil
+		siteModel.DNSRecordExists = nil
+		return
+	}
+
+	siteModel.DNSRecords = records
+	siteModel.DNSDomainID = domainID
+	firstRecord := records[0]
+	siteModel.DNSRecordID = &firstRecord.ID
+	siteModel.DNSRecordName = &firstRecord.Name
+	siteModel.DNSRecordType = &firstRecord.Type
+	siteModel.DNSRecordExists = &firstRecord.Exists
 }
 
 func GetSite(c *gin.Context) {
 	name := helper.UnescapeURL(c.Param("name"))
+	if rejectInvalidSiteName(c, name) {
+		return
+	}
 
 	path, err := site.ResolveAvailablePath(name)
 	if err != nil {
@@ -87,7 +155,7 @@ func GetSite(c *gin.Context) {
 		return
 	}
 
-	file, err := os.Stat(path)
+	file, err := nginx.Stat(path)
 	if os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{
 			"message": "file not found",
@@ -107,10 +175,11 @@ func GetSite(c *gin.Context) {
 		logger.Warn(err)
 	}
 
-	// Check DNS record existence if linked
-	if siteModel.DNSDomainID != nil && siteModel.DNSRecordID != nil {
-		exists := checkDNSRecordExists(*siteModel.DNSDomainID, *siteModel.DNSRecordID)
-		siteModel.DNSRecordExists = &exists
+	// Check all DNS record links and migrate legacy single-record links on read.
+	linkedRecords := getSiteDNSRecords(siteModel)
+	if siteModel.DNSDomainID != nil && len(linkedRecords) > 0 {
+		linkedRecords = checkDNSRecordsExist(*siteModel.DNSDomainID, linkedRecords)
+		setSiteDNSRecords(siteModel, siteModel.DNSDomainID, linkedRecords)
 		// Update in database
 		if err := query.Site.Save(siteModel); err != nil {
 			logger.Warn("Failed to update DNS record exists status:", err)
@@ -118,7 +187,7 @@ func GetSite(c *gin.Context) {
 	}
 
 	if siteModel.Advanced {
-		origContent, err := os.ReadFile(path)
+		origContent, err := nginx.ReadFile(path)
 		if err != nil {
 			cosy.ErrHandler(c, err)
 			return
@@ -173,24 +242,37 @@ func GetSite(c *gin.Context) {
 
 func SaveSite(c *gin.Context) {
 	name := helper.UnescapeURL(c.Param("name"))
+	if rejectInvalidSiteName(c, name) {
+		return
+	}
 
 	var json struct {
-		Content       string   `json:"content" binding:"required"`
-		NamespaceID   uint64   `json:"namespace_id"`
-		SyncNodeIDs   []uint64 `json:"sync_node_ids"`
-		Overwrite     bool     `json:"overwrite"`
-		PostAction    string   `json:"post_action"`
-		DNSDomainID   *int     `json:"dns_domain_id"`
-		DNSRecordID   *string  `json:"dns_record_id"`
-		DNSRecordName *string  `json:"dns_record_name"`
-		DNSRecordType *string  `json:"dns_record_type"`
+		Content       string                 `json:"content" binding:"required"`
+		NamespaceID   uint64                 `json:"namespace_id"`
+		Namespace     string                 `json:"namespace"`
+		SyncNodeIDs   []uint64               `json:"sync_node_ids"`
+		Overwrite     bool                   `json:"overwrite"`
+		PostAction    string                 `json:"post_action"`
+		DNSDomainID   *int                   `json:"dns_domain_id"`
+		DNSRecordID   *string                `json:"dns_record_id"`
+		DNSRecordName *string                `json:"dns_record_name"`
+		DNSRecordType *string                `json:"dns_record_type"`
+		DNSRecords    *[]model.SiteDNSRecord `json:"dns_records"`
+		Description   string                 `json:"description" binding:"max=500"`
 	}
 
 	if !cosy.BindAndValid(c, &json) {
 		return
 	}
 
-	err := site.Save(name, json.Content, json.Overwrite, json.NamespaceID, json.SyncNodeIDs, json.PostAction)
+	// A sync from another node identifies the namespace by name so both sides
+	// group the site the same way even though their ids differ.
+	namespaceID := json.NamespaceID
+	if json.Namespace != "" {
+		namespaceID = clustersync.ResolveNamespaceIDByName(json.Namespace)
+	}
+
+	err := site.Save(name, json.Content, json.Overwrite, namespaceID, json.SyncNodeIDs, json.PostAction)
 	if err != nil {
 		cosy.ErrHandler(c, err)
 		return
@@ -208,19 +290,25 @@ func SaveSite(c *gin.Context) {
 	if err != nil {
 		logger.Warn("Failed to find or create site for DNS update:", err)
 	} else {
-		// Update DNS fields
-		siteModel.DNSDomainID = json.DNSDomainID
-		siteModel.DNSRecordID = json.DNSRecordID
-		siteModel.DNSRecordName = json.DNSRecordName
-		siteModel.DNSRecordType = json.DNSRecordType
-
-		// Check if record exists if DNS info is provided
-		if json.DNSDomainID != nil && json.DNSRecordID != nil {
-			exists := checkDNSRecordExists(*json.DNSDomainID, *json.DNSRecordID)
-			siteModel.DNSRecordExists = &exists
-		} else {
-			siteModel.DNSRecordExists = nil
+		siteModel.Description = strings.TrimSpace(json.Description)
+		var linkedRecords []model.SiteDNSRecord
+		if json.DNSRecords != nil {
+			linkedRecords = normalizeDNSRecords(*json.DNSRecords)
+		} else if json.DNSRecordID != nil {
+			legacyRecord := model.SiteDNSRecord{ID: *json.DNSRecordID}
+			if json.DNSRecordName != nil {
+				legacyRecord.Name = *json.DNSRecordName
+			}
+			if json.DNSRecordType != nil {
+				legacyRecord.Type = *json.DNSRecordType
+			}
+			linkedRecords = []model.SiteDNSRecord{legacyRecord}
 		}
+
+		if json.DNSDomainID != nil {
+			linkedRecords = checkDNSRecordsExist(*json.DNSDomainID, linkedRecords)
+		}
+		setSiteDNSRecords(siteModel, json.DNSDomainID, linkedRecords)
 
 		if err := s.Save(siteModel); err != nil {
 			logger.Warn("Failed to save DNS link information:", err)
@@ -232,10 +320,17 @@ func SaveSite(c *gin.Context) {
 
 func RenameSite(c *gin.Context) {
 	oldName := helper.UnescapeURL(c.Param("name"))
+	if rejectInvalidSiteName(c, oldName) {
+		return
+	}
+
 	var json struct {
 		NewName string `json:"new_name"`
 	}
 	if !cosy.BindAndValid(c, &json) {
+		return
+	}
+	if rejectInvalidSiteName(c, json.NewName) {
 		return
 	}
 
@@ -252,12 +347,16 @@ func RenameSite(c *gin.Context) {
 
 func disableMaintenanceIfExists(name string) error {
 	// Check if the site is in maintenance mode, if yes, disable maintenance mode first
-	maintenanceConfigPath, err := site.ResolveEnabledPath(name + site.MaintenanceSuffix)
+	maintenanceConfigPath, err := site.ResolveEnabledMaintenancePath(name)
 	if err != nil {
 		return err
 	}
 
-	if _, err := os.Stat(maintenanceConfigPath); err == nil {
+	maintenanceExists, err := nginx.Exists(maintenanceConfigPath)
+	if err != nil {
+		return err
+	}
+	if maintenanceExists {
 		// Site is in maintenance mode, disable it first
 		err := site.DisableMaintenance(name)
 		if err != nil {
@@ -284,8 +383,31 @@ func disableSiteByName(name string) error {
 	return site.Disable(name)
 }
 
+func enableMaintenanceByName(name string, payload *site.MaintenancePayload) error {
+	// If site is already enabled, disable the normal site first.
+	enabledConfigPath, err := site.ResolveEnabledPath(name)
+	if err != nil {
+		return err
+	}
+
+	enabledExists, err := nginx.Exists(enabledConfigPath)
+	if err != nil {
+		return err
+	}
+	if enabledExists {
+		if err := site.Disable(name); err != nil {
+			return err
+		}
+	}
+
+	return site.EnableMaintenanceWithPayload(name, payload)
+}
+
 func EnableSite(c *gin.Context) {
 	name := helper.UnescapeURL(c.Param("name"))
+	if rejectInvalidSiteName(c, name) {
+		return
+	}
 
 	err := enableSiteByName(name)
 	if err != nil {
@@ -300,6 +422,9 @@ func EnableSite(c *gin.Context) {
 
 func DisableSite(c *gin.Context) {
 	name := helper.UnescapeURL(c.Param("name"))
+	if rejectInvalidSiteName(c, name) {
+		return
+	}
 
 	err := disableSiteByName(name)
 	if err != nil {
@@ -323,6 +448,9 @@ func BatchEnableSites(c *gin.Context) {
 	}
 
 	for _, name := range json.Names {
+		if rejectInvalidSiteName(c, name) {
+			return
+		}
 		if err := enableSiteByName(name); err != nil {
 			cosy.ErrHandler(c, err)
 			return
@@ -341,6 +469,9 @@ func BatchDisableSites(c *gin.Context) {
 	}
 
 	for _, name := range json.Names {
+		if rejectInvalidSiteName(c, name) {
+			return
+		}
 		if err := disableSiteByName(name); err != nil {
 			cosy.ErrHandler(c, err)
 			return
@@ -352,8 +483,49 @@ func BatchDisableSites(c *gin.Context) {
 	})
 }
 
+func BatchEnableMaintenanceSites(c *gin.Context) {
+	type batchEnableMaintenanceRequest struct {
+		Names                 []string `json:"names" binding:"required,min=1"`
+		StartTime             string   `json:"start_time"`
+		EndTime               string   `json:"end_time"`
+		Contact               string   `json:"contact"`
+		AdditionalInformation string   `json:"additioninfomation"`
+	}
+
+	var json batchEnableMaintenanceRequest
+	if !cosy.BindAndValid(c, &json) {
+		return
+	}
+
+	payload := &site.MaintenancePayload{
+		StartTime:           json.StartTime,
+		EndTime:             json.EndTime,
+		Contact:             json.Contact,
+		AdditionInformation: json.AdditionalInformation,
+	}
+
+	for _, name := range json.Names {
+		if rejectInvalidSiteName(c, name) {
+			return
+		}
+		if err := enableMaintenanceByName(name, payload); err != nil {
+			cosy.ErrHandler(c, err)
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "ok",
+	})
+}
+
 func DeleteSite(c *gin.Context) {
-	err := site.Delete(helper.UnescapeURL(c.Param("name")))
+	name := helper.UnescapeURL(c.Param("name"))
+	if rejectInvalidSiteName(c, name) {
+		return
+	}
+
+	err := site.Delete(name)
 	if err != nil {
 		cosy.ErrHandler(c, err)
 		return
@@ -395,27 +567,37 @@ func BatchUpdateSites(c *gin.Context) {
 		}).BatchModify()
 }
 
+func isInvalidSiteName(name string) bool {
+	return name == "" || name == "." ||
+		strings.ContainsAny(name, `/\`) || strings.Contains(name, "..")
+}
+
+// rejectInvalidSiteName responds with 400 and reports whether name failed
+// validation, so callers can bail out before it reaches any path expression.
+func rejectInvalidSiteName(c *gin.Context, name string) bool {
+	if !isInvalidSiteName(name) {
+		return false
+	}
+	c.JSON(http.StatusBadRequest, gin.H{
+		"message": "invalid site name",
+	})
+	return true
+}
+
 func EnableMaintenanceSite(c *gin.Context) {
 	name := helper.UnescapeURL(c.Param("name"))
+	if rejectInvalidSiteName(c, name) {
+		return
+	}
 
-	// If site is already enabled, disable the normal site first
-	enabledConfigPath, err := site.ResolveEnabledPath(name)
-	if err != nil {
+	var req site.MaintenancePayload
+	err := c.ShouldBindJSON(&req)
+	if err != nil && !errors.Is(err, io.EOF) {
 		cosy.ErrHandler(c, err)
 		return
 	}
 
-	if _, err := os.Stat(enabledConfigPath); err == nil {
-		// Site is already enabled, disable normal site first
-		err := site.Disable(name)
-		if err != nil {
-			cosy.ErrHandler(c, err)
-			return
-		}
-	}
-
-	// Then enable maintenance mode
-	err = site.EnableMaintenance(name)
+	err = enableMaintenanceByName(name, &req)
 	if err != nil {
 		cosy.ErrHandler(c, err)
 		return

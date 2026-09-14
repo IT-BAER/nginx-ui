@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { NgxDirective } from '@/api/ngx'
-import { DeleteOutlined, HolderOutlined, InfoCircleOutlined, LockOutlined } from '@ant-design/icons-vue'
+import { DeleteOutlined, HolderOutlined, InfoCircleOutlined, LockOutlined } from '@antdv-next/icons'
 import config from '@/api/config'
 import CodeEditor from '@/components/CodeEditor'
 import { Include } from '..'
@@ -23,7 +23,10 @@ const directiveStore = useDirectiveStore()
 const { curIdx } = storeToRefs(directiveStore)
 
 const directive = defineModel<NgxDirective>('directive', {
-  default: reactive({}),
+  default: () => ({
+    directive: '',
+    params: '',
+  }),
 })
 
 const content = ref('')
@@ -93,7 +96,7 @@ const isInputReadonly = computed(() => {
         :readonly="isInputReadonly"
         @click="curIdx = index"
       >
-        <template #addonBefore>
+        <template #prefix>
           <HolderOutlined />
           {{ directive.directive }}
         </template>

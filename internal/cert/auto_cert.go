@@ -42,6 +42,11 @@ func autoCert(certModel *model.Cert) {
 	targetName := getAutoRenewTargetName(certModel)
 	now := time.Now()
 
+	if shouldSkipAutoCertByStatus(certModel) {
+		logger.Infof("Skip auto cert for %s due to status %s", targetName, certModel.Status)
+		return
+	}
+
 	if shouldSkipAutoRenew(certModel, now) {
 		logger.Infof("Skip auto renew for %s until %s after previous failure", targetName,
 			certModel.LastAutoRenewAt.Add(autoRenewFailureRetryCooldown).Format(time.DateTime))
@@ -65,49 +70,32 @@ func autoCert(certModel *model.Cert) {
 		return
 	}
 
-	certInfo, err := GetCertInfo(certModel.SSLCertificatePath)
+	certificate, err := getCertificate(certModel.SSLCertificatePath)
 	if err != nil {
 		handleAutoRenewFailure(certModel, log, targetName, pkgerrors.Wrap(err, "get certificate info error"))
 		return
 	}
+	certInfo := certificateInfo(certificate)
 
-	// Calculate certificate age (days since NotBefore)
-	certAge := int(time.Since(certInfo.NotBefore).Hours() / 24)
-	// Calculate days until expiration
-	daysUntilExpiration := int(time.Until(certInfo.NotAfter).Hours() / 24)
-	// Calculate total certificate validity period
-	totalValidityDays := int(certInfo.NotAfter.Sub(certInfo.NotBefore).Hours() / 24)
-
-	renewalInterval := settings.CertSettings.GetCertRenewalInterval()
-
-	// For certificates with short validity periods (less than renewal interval),
-	// use early renewal logic to prevent expiration.
-	if totalValidityDays < renewalInterval {
-		// Renew when 2/3 of the certificate's lifetime remains.
-		earlyRenewalThreshold := 2 * totalValidityDays / 3
-		if daysUntilExpiration > earlyRenewalThreshold {
+	renewalThresholdDays := settings.CertSettings.GetCertRenewalInterval()
+	scheduleDecision := getRenewalScheduleDecision(certModel, certificate, now)
+	if scheduleDecision.UsesARI {
+		if !scheduleDecision.Due {
 			return
 		}
-	} else {
-		// For normal certificates with validity >= renewal interval:
-		// skip renewal if certificate age is less than the configured renewal interval.
-		if certAge < renewalInterval {
-			return
-		}
+	} else if !shouldRenewACMECertificate(certInfo, now, renewalThresholdDays) {
+		return
 	}
 
-	payload := &ConfigPayload{
-		CertID:                  certModel.ID,
-		ServerName:              certModel.Domains,
-		ChallengeMethod:         certModel.ChallengeMethod,
-		DNSCredentialID:         certModel.DnsCredentialID,
-		KeyType:                 certModel.GetKeyType(),
-		ACMEUserID:              certModel.ACMEUserID,
-		NotBefore:               certInfo.NotBefore,
-		MustStaple:              certModel.MustStaple,
-		LegoDisableCNAMESupport: certModel.LegoDisableCNAMESupport,
-		RevokeOld:               certModel.RevokeOld,
-	}
+	payload := newAutoRenewPayload(certModel, certInfo, scheduleDecision.ReplacesCertID)
+
+	// Renew in place. The nginx configuration keeps referencing the paths that
+	// were recorded when the certificate was first issued, and nothing rewrites
+	// those directives afterwards, so the renewed material has to overwrite the
+	// very same files. Without this the renewal silently lands in a directory
+	// derived from the current identifiers and key type and nginx goes on
+	// serving the expiring certificate.
+	payload.UseExistingCertificatePaths(certModel.SSLCertificatePath, certModel.SSLCertificateKeyPath)
 
 	if certModel.Resource != nil {
 		payload.Resource = &model.CertificateResource{
@@ -137,12 +125,46 @@ func autoCert(certModel *model.Cert) {
 	}
 }
 
+func newAutoRenewPayload(certModel *model.Cert, certInfo *Info, replacesCertID string) *ConfigPayload {
+	return &ConfigPayload{
+		CertID:                            certModel.ID,
+		ServerName:                        certModel.Domains,
+		ChallengeMethod:                   certModel.ChallengeMethod,
+		Profile:                           certModel.Profile,
+		DNSCredentialID:                   certModel.DnsCredentialID,
+		KeyType:                           certModel.GetKeyType(),
+		ACMEUserID:                        certModel.ACMEUserID,
+		NotBefore:                         certInfo.NotBefore,
+		MustStaple:                        certModel.MustStaple,
+		LegoDisableCNAMESupport:           certModel.LegoDisableCNAMESupport,
+		DisableAuthoritativeNSPropagation: certModel.DisableAuthoritativeNSPropagation,
+		EnableCommonName:                  certModel.EnableCommonName,
+		RevokeOld:                         certModel.RevokeOld,
+		ReplacesCertID:                    replacesCertID,
+	}
+}
+
+func shouldRenewACMECertificate(info *Info, now time.Time, renewalThresholdDays int) bool {
+	return shouldRenewCertificate(info, now, renewalThresholdDays)
+}
+
 func shouldSkipAutoRenew(certModel *model.Cert, now time.Time) bool {
 	if certModel == nil || certModel.LastAutoRenewAt == nil || certModel.LastAutoRenewError == "" {
 		return false
 	}
 
 	return now.Before(certModel.LastAutoRenewAt.Add(autoRenewFailureRetryCooldown))
+}
+
+// shouldSkipAutoCertByStatus returns true when the cert's most recent
+// issuance attempt has not succeeded. Pending and failed certs must
+// be retried by the user explicitly; auto-renew should not touch them.
+func shouldSkipAutoCertByStatus(certModel *model.Cert) bool {
+	if certModel == nil {
+		return false
+	}
+	return certModel.Status == model.CertStatusPending ||
+		certModel.Status == model.CertStatusFailure
 }
 
 func handleAutoRenewFailure(certModel *model.Cert, log *Logger, name string, err error) {
@@ -219,6 +241,10 @@ func getAutoRenewTargetName(certModel *model.Cert) string {
 
 	if certModel.Name != "" {
 		return certModel.Name
+	}
+
+	if certModel.SelfSignedConfig != nil && len(certModel.SelfSignedConfig.IPAddresses) > 0 {
+		return strings.Join(certModel.SelfSignedConfig.IPAddresses, ", ")
 	}
 
 	return "unknown certificate"

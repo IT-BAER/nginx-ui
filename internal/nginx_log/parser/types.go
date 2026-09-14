@@ -7,12 +7,15 @@ import (
 
 // AccessLogEntry represents a parsed access log entry
 type AccessLogEntry struct {
-	ID           string   `json:"id"`
 	Timestamp    int64    `json:"timestamp"` // Unix timestamp
 	IP           string   `json:"ip"`
 	RegionCode   string   `json:"region_code"`
 	Province     string   `json:"province"`
 	City         string   `json:"city"`
+	C1           string   `json:"c1,omitempty"`
+	C2           string   `json:"c2,omitempty"`
+	C3           string   `json:"c3,omitempty"`
+	C4           string   `json:"c4,omitempty"`
 	Method       string   `json:"method"`
 	Path         string   `json:"path"`
 	Protocol     string   `json:"protocol"`
@@ -62,6 +65,10 @@ type GeoLocation struct {
 	RegionCode  string
 	Province    string
 	City        string
+	C1          string
+	C2          string
+	C3          string
+	C4          string
 }
 
 // ParseResult represents the result of parsing operation

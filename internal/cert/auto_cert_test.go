@@ -98,3 +98,86 @@ func TestGetAutoRenewNotificationResponseFallsBackToPlainText(t *testing.T) {
 		t.Fatalf("unexpected fallback response: %s", text)
 	}
 }
+
+func TestShouldSkipAutoCertForNonSuccessStatus(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   string
+		expected bool
+	}{
+		{"pending is skipped", model.CertStatusPending, true},
+		{"failure is skipped", model.CertStatusFailure, true},
+		{"success is renewed", model.CertStatusSuccess, false},
+		{"empty (legacy) is renewed", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := &model.Cert{Status: tc.status}
+			if got := shouldSkipAutoCertByStatus(cert); got != tc.expected {
+				t.Fatalf("shouldSkipAutoCertByStatus(%q) = %v, want %v", tc.status, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestNewAutoRenewPayloadPreservesAuthoritativePropagationOption(t *testing.T) {
+	notBefore := time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC)
+	certModel := &model.Cert{
+		DisableAuthoritativeNSPropagation: true,
+	}
+
+	payload := newAutoRenewPayload(certModel, &Info{NotBefore: notBefore}, "aki.serial")
+
+	if !payload.DisableAuthoritativeNSPropagation {
+		t.Fatal("authoritative propagation option was not copied to auto-renew payload")
+	}
+	if !payload.NotBefore.Equal(notBefore) {
+		t.Fatalf("NotBefore = %s, want %s", payload.NotBefore, notBefore)
+	}
+	if payload.ReplacesCertID != "aki.serial" {
+		t.Fatalf("ReplacesCertID = %q, want aki.serial", payload.ReplacesCertID)
+	}
+}
+
+func TestShouldRenewACMECertificateRenewsShortLifetimeAtMidpoint(t *testing.T) {
+	notBefore := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	info := &Info{
+		NotBefore: notBefore,
+		NotAfter:  notBefore.Add(160 * time.Hour),
+	}
+
+	if shouldRenewACMECertificate(info, notBefore.Add(79*time.Hour), 7) {
+		t.Fatal("certificate renewed before half of its lifetime elapsed")
+	}
+	if !shouldRenewACMECertificate(info, notBefore.Add(80*time.Hour), 7) {
+		t.Fatal("certificate not renewed at half of its lifetime")
+	}
+}
+
+func TestShouldRenewACMECertificateUsesRemainingValidityThreshold(t *testing.T) {
+	notBefore := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	info := &Info{
+		NotBefore: notBefore,
+		NotAfter:  notBefore.Add(90 * 24 * time.Hour),
+	}
+
+	if shouldRenewACMECertificate(info, info.NotAfter.Add(-31*24*time.Hour), 30) {
+		t.Fatal("normal certificate renewed with more than the configured validity remaining")
+	}
+	if !shouldRenewACMECertificate(info, info.NotAfter.Add(-30*24*time.Hour), 30) {
+		t.Fatal("normal certificate not renewed at the remaining-validity threshold")
+	}
+}
+
+func TestCertificateRenewalTimeUsesMidpointForOversizedThreshold(t *testing.T) {
+	notBefore := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	info := &Info{
+		NotBefore: notBefore,
+		NotAfter:  notBefore.Add(20 * 24 * time.Hour),
+	}
+
+	want := notBefore.Add(10 * 24 * time.Hour)
+	if got := certificateRenewalTime(info, 30); !got.Equal(want) {
+		t.Fatalf("certificateRenewalTime() = %s, want %s", got, want)
+	}
+}

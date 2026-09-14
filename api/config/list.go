@@ -8,6 +8,7 @@ import (
 
 	"github.com/0xJacky/Nginx-UI/internal/config"
 	"github.com/0xJacky/Nginx-UI/internal/helper"
+	"github.com/0xJacky/Nginx-UI/internal/nginx"
 	"github.com/0xJacky/Nginx-UI/model"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cast"
@@ -43,10 +44,11 @@ func GetConfigs(c *gin.Context) {
 	namespaceId := cast.ToUint64(c.Query("namespace_id"))
 
 	// Get directory parameter
-	encodedDir := c.DefaultQuery("dir", "/")
-
-	// Handle cases where the path might be encoded multiple times
-	dir := helper.UnescapeURL(encodedDir)
+	dir, encoded := helper.DecodePathParam(c.DefaultQuery("dir", "/"))
+	if !encoded {
+		// Handle cases where the path might be encoded multiple times
+		dir = helper.UnescapeURL(dir)
+	}
 
 	// Ensure the directory path format is correct
 	dir = strings.TrimSpace(dir)
@@ -70,7 +72,7 @@ func GetConfigs(c *gin.Context) {
 	}
 
 	// Get config files from directory and create entities
-	configFiles, err := os.ReadDir(fullDir)
+	configFiles, err := nginx.ReadDir(fullDir)
 	if err != nil {
 		cosy.ErrHandler(c, err)
 		return

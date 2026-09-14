@@ -1,5 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
-import { CloudOutlined } from '@ant-design/icons-vue'
+import { CloudOutlined } from '@antdv-next/icons'
 
 export const sitesRoutes: RouteRecordRaw[] = [
   {
@@ -10,8 +10,15 @@ export const sitesRoutes: RouteRecordRaw[] = [
       name: () => $gettext('Manage Sites'),
       icon: CloudOutlined,
     },
-    redirect: '/sites/list',
     children: [{
+      path: '',
+      name: 'Sites Home',
+      component: () => import('@/views/site/index.vue'),
+      meta: {
+        name: () => $gettext('Manage Sites'),
+        hiddenInSidebar: true,
+      },
+    }, {
       path: 'list',
       name: 'Sites List',
       component: () => import('@/views/site/site_list/SiteList.vue'),

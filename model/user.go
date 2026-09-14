@@ -18,9 +18,10 @@ type RecoveryCode struct {
 }
 
 type RecoveryCodes struct {
-	Codes          []*RecoveryCode `json:"codes"`
-	LastViewed     *int64          `json:"last_viewed,omitempty" gorm:"serializer:unixtime;type:datetime;default:null"`
-	LastDownloaded *int64          `json:"last_downloaded,omitempty" gorm:"serializer:unixtime;type:datetime;default:null"`
+	Codes                    []*RecoveryCode `json:"codes"`
+	LastViewed               *int64          `json:"last_viewed,omitempty" gorm:"serializer:unixtime;type:datetime;default:null"`
+	LastDownloaded           *int64          `json:"last_downloaded,omitempty" gorm:"serializer:unixtime;type:datetime;default:null"`
+	LegacyRecoveryCodeUsedAt *int64          `json:"legacy_recovery_code_used_at,omitempty" gorm:"serializer:unixtime;type:datetime;default:null"`
 }
 
 type User struct {
@@ -28,7 +29,7 @@ type User struct {
 
 	Name          string        `json:"name" cosy:"add:max=20;update:omitempty,max=20;list:fussy;db_unique"`
 	Password      string        `json:"-" cosy:"json:password;add:required,max=20;update:omitempty,max=20"`
-	Status        bool          `json:"status" gorm:"default:1"`
+	Status        bool          `json:"status" cosy:"update:omitempty" gorm:"default:1"`
 	OTPSecret     []byte        `json:"-" gorm:"type:blob"`
 	RecoveryCodes RecoveryCodes `json:"-" gorm:"serializer:json[aes]"`
 	EnabledTwoFA  bool          `json:"enabled_2fa" gorm:"-"`
@@ -57,6 +58,10 @@ func (u *User) EnabledOTP() bool {
 
 func (u *User) RecoveryCodeGenerated() bool {
 	return len(u.RecoveryCodes.Codes) > 0
+}
+
+func (u *User) RecoveryCodesMigrationRequired() bool {
+	return u.EnabledOTP() && !u.RecoveryCodeGenerated()
 }
 
 func (u *User) RecoveryCodeViewed() bool {

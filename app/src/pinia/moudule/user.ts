@@ -1,7 +1,13 @@
 import type { CookieChangeOptions } from 'universal-cookie'
+import type { TwoFAStatus } from '@/api/2fa'
 import type { User } from '@/api/user'
 import { useCookies } from '@vueuse/integrations/useCookies'
+import twoFA from '@/api/2fa'
 import userApi from '@/api/user'
+import { isTokenExpired } from '@/lib/auth/tokenExpiry'
+
+// Matches the release-build two-factor session window on the backend.
+const defaultSecureSessionTTL = 60 * 10
 
 export const useUserStore = defineStore('user', () => {
   const cookies = useCookies(['nginx-ui'])
@@ -22,33 +28,66 @@ export const useUserStore = defineStore('user', () => {
 
   watch(token, v => {
     if (v) {
-      cookies.set('token', v, getCookieOptions(86400))
       if (!shortToken.value) {
         void fetchShortToken()
       }
     }
     else {
-      cookies.remove('token', { path: '/' })
       shortToken.value = ''
     }
   })
 
   const secureSessionId = ref('')
+  // Seconds the backend keeps a verified two-factor session. Reported when the
+  // session is created so the cookie does not expire before the server side.
+  const secureSessionTTL = ref(defaultSecureSessionTTL)
 
-  watch(secureSessionId, v => {
-    if (v)
-      cookies.set('secure_session_id', v, getCookieOptions(60 * 3))
+  function getEmptyTwoFAStatus(): TwoFAStatus {
+    return {
+      enabled: false,
+      otp_status: false,
+      passkey_status: false,
+      recovery_codes_generated: false,
+      recovery_codes_viewed: false,
+      recovery_codes_migration_required: false,
+    }
+  }
+
+  const twoFAStatus = ref<TwoFAStatus>(getEmptyTwoFAStatus())
+
+  // Set while mirroring a cookie another tab wrote, so this tab does not write
+  // the shared cookie back with its own, possibly shorter, TTL.
+  let syncingFromCookie = false
+
+  watch([secureSessionId, secureSessionTTL], ([id, ttl]) => {
+    if (syncingFromCookie) {
+      syncingFromCookie = false
+      return
+    }
+    if (id)
+      cookies.set('secure_session_id', id, getCookieOptions(ttl || defaultSecureSessionTTL))
     else
       cookies.remove('secure_session_id', { path: '/' })
   })
 
-  function handleCookieChange({ name, value }: CookieChangeOptions) {
-    if (name === 'token')
-      token.value = value || ''
-    else if (name === 'secure_session_id')
-      secureSessionId.value = value || ''
+  function setSecureSession(id: string, ttl?: number) {
+    secureSessionTTL.value = ttl && ttl > 0 ? ttl : defaultSecureSessionTTL
+    secureSessionId.value = id
   }
 
+  function handleCookieChange({ name, value }: CookieChangeOptions) {
+    if (name !== 'secure_session_id')
+      return
+    const next = value || ''
+    if (next === secureSessionId.value)
+      return
+    syncingFromCookie = true
+    secureSessionId.value = next
+  }
+
+  // Remove the legacy ambient JWT cookie. Authentication state is persisted by
+  // Pinia and sent explicitly through the Authorization header.
+  cookies.remove('token', { path: '/' })
   cookies.addChangeListener(handleCookieChange)
 
   const passkeyRawId = ref('')
@@ -72,29 +111,41 @@ export const useUserStore = defineStore('user', () => {
     shortToken.value = ''
     passkeyRawId.value = ''
     secureSessionId.value = ''
+    secureSessionTTL.value = defaultSecureSessionTTL
     unreadCount.value = 0
     info.value = {} as User
+    twoFAStatus.value = getEmptyTwoFAStatus()
+    shortTokenRequest = null
+  }
+
+  function expireSession(): boolean {
+    if (!isTokenExpired(token.value))
+      return false
+    logout()
+    return true
   }
 
   async function fetchShortToken() {
-    if (!token.value)
+    if (expireSession() || !token.value)
       return
     if (shortTokenRequest)
       return shortTokenRequest
-    shortTokenRequest = (async () => {
-      try {
-        const data = await userApi.fetchShortToken()
-        shortToken.value = data.short_token
-      }
-      catch (error) {
+    const requestedToken = token.value
+    const request = userApi.fetchShortToken()
+      .then(data => {
+        // A response from a previous login must not repopulate the new session.
+        if (token.value === requestedToken)
+          shortToken.value = data.short_token
+      })
+      .catch(error => {
         console.error('Failed to fetch short token:', error)
-      }
-      finally {
-        shortTokenRequest = null
-      }
-    })()
-
-    return shortTokenRequest
+      })
+      .finally(() => {
+        if (shortTokenRequest === request)
+          shortTokenRequest = null
+      })
+    shortTokenRequest = request
+    return request
   }
 
   async function getCurrentUser() {
@@ -106,6 +157,21 @@ export const useUserStore = defineStore('user', () => {
     catch (error) {
       console.error('Failed to get current user:', error)
       throw error
+    }
+  }
+
+  async function refreshTwoFAStatus() {
+    if (!token.value)
+      return twoFAStatus.value
+
+    try {
+      const status = await twoFA.status()
+      twoFAStatus.value = status
+      return status
+    }
+    catch (error) {
+      console.error('Failed to refresh 2FA status:', error)
+      return twoFAStatus.value
     }
   }
 
@@ -153,14 +219,19 @@ export const useUserStore = defineStore('user', () => {
     shortToken,
     unreadCount,
     secureSessionId,
+    secureSessionTTL,
+    setSecureSession,
     passkeyRawId,
     info,
+    twoFAStatus,
     isLogin,
     passkeyLoginAvailable,
     passkeyLogin,
     login,
     logout,
+    expireSession,
     fetchShortToken,
+    refreshTwoFAStatus,
     getCurrentUser,
     updateCurrentUser,
     updateCurrentUserPassword,
@@ -168,6 +239,6 @@ export const useUserStore = defineStore('user', () => {
   }
 }, {
   persist: {
-    pick: ['token', 'secureSessionId', 'passkeyRawId', 'info', 'unreadCount'],
+    pick: ['token', 'secureSessionId', 'secureSessionTTL', 'passkeyRawId', 'info', 'unreadCount'],
   },
 })

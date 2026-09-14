@@ -5,8 +5,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/0xJacky/Nginx-UI/api"
 	"github.com/0xJacky/Nginx-UI/internal/config"
-	"github.com/0xJacky/Nginx-UI/internal/helper"
+	"github.com/0xJacky/Nginx-UI/internal/nginx"
 	"github.com/0xJacky/Nginx-UI/model"
 	"github.com/0xJacky/Nginx-UI/query"
 	"github.com/gin-gonic/gin"
@@ -35,7 +36,12 @@ func EditConfig(c *gin.Context) {
 		return
 	}
 
-	if !helper.FileExists(absPath) {
+	exists, err := nginx.Exists(absPath)
+	if err != nil {
+		cosy.ErrHandler(c, err)
+		return
+	}
+	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{
 			"message": "file not found",
 		})
@@ -72,7 +78,7 @@ func EditConfig(c *gin.Context) {
 	cfg.SyncNodeIds = json.SyncNodeIds
 	cfg.SyncOverwrite = json.SyncOverwrite
 
-	err = config.Save(absPath, content, cfg)
+	err = config.Save(absPath, content, cfg, api.CurrentUser(c).Name)
 	if err != nil {
 		cosy.ErrHandler(c, err)
 		return

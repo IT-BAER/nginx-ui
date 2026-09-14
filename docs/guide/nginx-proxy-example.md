@@ -3,6 +3,17 @@
 In this guide, we'll walk you through the process of configuring an Nginx server to redirect HTTP traffic to HTTPS and
 set up a reverse proxy for the Nginx UI running on `http://127.0.0.1:9000/`.
 
+When using this configuration outside the official Docker image, add the
+reverse proxy address to the Nginx UI configuration and restart Nginx UI:
+
+```ini
+[auth]
+TrustedProxies = 127.0.0.1
+```
+
+Only list proxy addresses you control. Nginx UI ignores forwarded client IP
+headers received from other peers.
+
 ```nginx
 server {
     listen          80;
@@ -57,3 +68,16 @@ Within the second server block, the location `/` section contains proxy settings
 `9000`. The proxy settings also include a number of headers for proper handling of the forwarded requests, such
 as `Host`,
 `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `Upgrade`, and `Connection`.
+
+## Paired nodes behind a path prefix
+
+If a node is published under `/nui/`, configure its URL on the controller as
+`https://node.example.com/nui`. Use `location /nui/` with a trailing-slash
+`proxy_pass http://127.0.0.1:9000/` so the backend receives `/api/...` rather
+than `/nui/api/...`.
+
+Paired HTTP requests and WebSocket handshakes sign the backend path after
+removing the configured node URL prefix. The outgoing URL still includes that
+prefix. The remaining path, query, method, and body remain authenticated;
+forwarded headers do not determine the signed path. Additional proxy rewrites
+of the remaining path or query will invalidate the signature.

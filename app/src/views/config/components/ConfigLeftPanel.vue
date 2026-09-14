@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Config } from '@/api/config'
-import { HistoryOutlined } from '@ant-design/icons-vue'
+import { HistoryOutlined } from '@antdv-next/icons'
 import { trim, trimEnd } from 'lodash'
 import config from '@/api/config'
 import ngx from '@/api/ngx'
@@ -105,9 +105,9 @@ async function init() {
       })
 
       breadcrumbs.value = [{
-        name: 'Dashboard',
-        translatedName: () => $gettext('Dashboard'),
-        path: '/dashboard',
+        name: 'Home',
+        translatedName: () => $gettext('Home'),
+        path: '/',
         hasChildren: false,
       }, {
         name: 'Manage Configs',
@@ -155,9 +155,9 @@ async function init() {
     })
 
     breadcrumbs.value = [{
-      name: 'Dashboard',
-      translatedName: () => $gettext('Dashboard'),
-      path: '/dashboard',
+      name: 'Home',
+      translatedName: () => $gettext('Home'),
+      path: '/',
       hasChildren: false,
     }, {
       name: 'Manage Configs',
@@ -240,7 +240,7 @@ function openHistory() {
 <template>
   <ACard
     :title="addMode ? $gettext('Add Configuration') : $gettext('Edit Configuration')"
-    :bordered="false" :loading
+    variant="borderless" :loading
   >
     <template #extra>
       <AButton

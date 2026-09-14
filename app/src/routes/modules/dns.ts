@@ -1,17 +1,25 @@
 import type { RouteRecordRaw } from 'vue-router'
-import { CloudServerOutlined } from '@ant-design/icons-vue'
+import { CloudServerOutlined } from '@antdv-next/icons'
 
 export const dnsRoutes: RouteRecordRaw[] = [
   {
     path: 'dns',
     name: 'DNS',
     component: () => import('@/layouts/BaseRouterView.vue'),
-    redirect: '/dns/domains',
     meta: {
       name: () => $gettext('DNS'),
       icon: CloudServerOutlined,
     },
     children: [
+      {
+        path: '',
+        name: 'DNS Home',
+        component: () => import('@/views/dns/index.vue'),
+        meta: {
+          name: () => $gettext('DNS'),
+          hiddenInSidebar: true,
+        },
+      },
       {
         path: 'credentials',
         name: 'DNS Credentials',
@@ -26,6 +34,14 @@ export const dnsRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/dns/DNSDomainList.vue'),
         meta: {
           name: () => $gettext('DNS Domains'),
+        },
+      },
+      {
+        path: 'groups',
+        name: 'DNS Groups',
+        component: () => import('@/views/dns/DNSGroupList.vue'),
+        meta: {
+          name: () => $gettext('Groups'),
         },
       },
       {
@@ -44,6 +60,16 @@ export const dnsRoutes: RouteRecordRaw[] = [
           name: () => $gettext('DNS Records'),
           hiddenInSidebar: true,
           lastRouteName: 'DNS Domains',
+        },
+      },
+      {
+        path: 'groups/:id/records',
+        name: 'DNS Group Records',
+        component: () => import('@/views/dns/DNSGroupRecordManager.vue'),
+        meta: {
+          name: () => $gettext('Group Records'),
+          hiddenInSidebar: true,
+          lastRouteName: 'DNS Groups',
         },
       },
     ],

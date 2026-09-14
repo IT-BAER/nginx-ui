@@ -25,6 +25,15 @@ import 'nprogress/nprogress.css'
 
 // Combine child routes for the main layout
 const mainLayoutChildren: RouteRecordRaw[] = [
+  {
+    path: '',
+    name: 'Home Tabs',
+    component: () => import('@/views/home/HomeTabs.vue'),
+    meta: {
+      name: () => $gettext('Home'),
+      hiddenInSidebar: true,
+    },
+  },
   ...dashboardRoutes,
   ...sitesRoutes,
   ...streamsRoutes,
@@ -49,7 +58,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/',
     name: 'Home',
     component: () => import('@/layouts/BaseLayout.vue'),
-    redirect: '/dashboard',
     meta: {
       name: () => $gettext('Home'),
     },
@@ -80,6 +88,7 @@ router.beforeEach(to => {
   nprogress.start()
 
   const user = useUserStore()
+  user.expireSession()
 
   if (to.meta.noAuth || user.isLogin)
     return true

@@ -36,7 +36,7 @@ export const useNodeAvailabilityStore = defineStore('nodeAvailability', () => {
     try {
       const sanitized = Object.fromEntries(
         Object.entries(value).map(([nodeId, node]) => {
-          const { token, ...safeNode } = node
+          const { token: _legacyToken, ...safeNode } = node as Partial<AnalyticNode> & { token?: string }
           return [nodeId, safeNode]
         }),
       )
@@ -68,12 +68,7 @@ export const useNodeAvailabilityStore = defineStore('nodeAvailability', () => {
       try {
         const nodesData = JSON.parse(event.data) as Record<string, Partial<AnalyticNode>>
 
-        Object.keys(nodesData).forEach((nodeIdStr: string) => {
-          const nodeId = Number.parseInt(nodeIdStr)
-          const nodeData = nodesData[nodeIdStr]
-
-          nodes.value[nodeId] = nodeData
-        })
+        nodes.value = nodesData
 
         writeCachedNodes(nodes.value)
 
@@ -105,7 +100,12 @@ export const useNodeAvailabilityStore = defineStore('nodeAvailability', () => {
           name: node.name,
           status: node.status,
           url: node.url,
-          token: node.token,
+          auth_method: node.auth_method,
+          has_credential: node.has_credential,
+          credential_status: node.credential_status,
+          connection_error: node.connection_error,
+          connection_error_code: node.connection_error_code,
+          connection_error_at: node.connection_error_at,
           enabled: true,
         }
       })

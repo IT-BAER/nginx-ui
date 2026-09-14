@@ -2,6 +2,7 @@ package analytic
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -63,8 +64,8 @@ func TestNodeAnalyticRecordHalfDeadConnection(t *testing.T) {
 		Model: model.Model{ID: 42},
 		Name:  "half-dead",
 		URL:   srv.URL,
-		Token: "test-token",
 	}
+	setupLegacyNodeAuthForTest(t, node, "test-token")
 	// Make sure the NodeMap slot exists so updateNodeStatus is a no-op on the
 	// shared map across parallel tests.
 	nodeMapMu.Lock()
@@ -98,5 +99,195 @@ func TestNodeAnalyticRecordHalfDeadConnection(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("nodeAnalyticRecord did not return within 2s — read deadline / ping-pong not enforced")
+	}
+}
+
+func TestConnectionFailureKeepsFreshNodeOnline(t *testing.T) {
+	nodeID := uint64(43)
+	lastResponse := time.Now().Add(-time.Second)
+
+	nodeMapMu.Lock()
+	NodeMap[nodeID] = &Node{NodeStat: NodeStat{
+		Status:     true,
+		ResponseAt: lastResponse,
+	}}
+	nodeMapMu.Unlock()
+	retryMutex.Lock()
+	delete(retryStates, nodeID)
+	retryMutex.Unlock()
+	t.Cleanup(func() {
+		nodeMapMu.Lock()
+		delete(NodeMap, nodeID)
+		nodeMapMu.Unlock()
+		retryMutex.Lock()
+		delete(retryStates, nodeID)
+		retryMutex.Unlock()
+	})
+
+	markConnectionFailure(nodeID, context.DeadlineExceeded)
+
+	nodeMapMu.RLock()
+	node := cloneNode(NodeMap[nodeID])
+	nodeMapMu.RUnlock()
+	if !node.Status {
+		t.Fatal("expected a transient connection failure to preserve fresh online status")
+	}
+	if !node.ResponseAt.Equal(lastResponse) {
+		t.Fatalf("expected last successful response time to be preserved, got %v", node.ResponseAt)
+	}
+	if node.ConnectionError != context.DeadlineExceeded.Error() || node.ConnectionErrorAt == nil {
+		t.Fatalf("expected the latest connection error to be retained, got %q at %v", node.ConnectionError, node.ConnectionErrorAt)
+	}
+}
+
+func TestConnectionFailureMarksStaleNodeOffline(t *testing.T) {
+	nodeID := uint64(44)
+	lastResponse := time.Now().Add(-nodeOfflineTimeout - time.Second)
+
+	nodeMapMu.Lock()
+	NodeMap[nodeID] = &Node{NodeStat: NodeStat{
+		Status:     true,
+		ResponseAt: lastResponse,
+	}}
+	nodeMapMu.Unlock()
+	t.Cleanup(func() {
+		nodeMapMu.Lock()
+		delete(NodeMap, nodeID)
+		nodeMapMu.Unlock()
+		retryMutex.Lock()
+		delete(retryStates, nodeID)
+		retryMutex.Unlock()
+	})
+
+	markConnectionFailure(nodeID, context.DeadlineExceeded)
+
+	nodeMapMu.RLock()
+	node := cloneNode(NodeMap[nodeID])
+	nodeMapMu.RUnlock()
+	if node.Status {
+		t.Fatal("expected a stale node to be marked offline")
+	}
+	if !node.ResponseAt.Equal(lastResponse) {
+		t.Fatalf("expected offline transition to preserve last successful response time, got %v", node.ResponseAt)
+	}
+}
+
+func TestConnectionFailureClassifiesClockSkew(t *testing.T) {
+	nodeID := uint64(50)
+	now := time.Now()
+	certificate := &x509.Certificate{NotBefore: now.Add(10 * time.Minute)}
+
+	nodeMapMu.Lock()
+	NodeMap[nodeID] = &Node{}
+	nodeMapMu.Unlock()
+	retryMutex.Lock()
+	delete(retryStates, nodeID)
+	retryMutex.Unlock()
+	t.Cleanup(func() {
+		nodeMapMu.Lock()
+		delete(NodeMap, nodeID)
+		nodeMapMu.Unlock()
+		retryMutex.Lock()
+		delete(retryStates, nodeID)
+		retryMutex.Unlock()
+	})
+
+	markConnectionFailure(nodeID, x509.CertificateInvalidError{
+		Cert:   certificate,
+		Reason: x509.Expired,
+		Detail: "current time is before the certificate validity period",
+	})
+
+	nodeMapMu.RLock()
+	node := cloneNode(NodeMap[nodeID])
+	nodeMapMu.RUnlock()
+	if node.ConnectionErrorCode != NodeConnectionErrorClockSkew {
+		t.Fatalf("connection error code = %q, want %q", node.ConnectionErrorCode, NodeConnectionErrorClockSkew)
+	}
+}
+
+func TestSuccessfulSampleResetsRetryBackoff(t *testing.T) {
+	nodeID := uint64(45)
+	retryMutex.Lock()
+	retryStates[nodeID] = &NodeRetryState{
+		FailureCount: 7,
+		NextRetry:    time.Now().Add(time.Minute),
+	}
+	retryMutex.Unlock()
+	t.Cleanup(func() {
+		retryMutex.Lock()
+		delete(retryStates, nodeID)
+		retryMutex.Unlock()
+		nodeMapMu.Lock()
+		delete(NodeMap, nodeID)
+		nodeMapMu.Unlock()
+	})
+
+	failedAt := time.Now()
+	nodeMapMu.Lock()
+	NodeMap[nodeID] = &Node{
+		ConnectionError:     context.DeadlineExceeded.Error(),
+		ConnectionErrorCode: NodeConnectionErrorClockSkew,
+		ConnectionErrorAt:   &failedAt,
+	}
+	nodeMapMu.Unlock()
+
+	if !markConnectionSuccess(nodeID) {
+		t.Fatal("expected a successful sample after failures to report recovery")
+	}
+
+	retryMutex.Lock()
+	state := *retryStates[nodeID]
+	retryMutex.Unlock()
+	if state.FailureCount != 0 {
+		t.Fatalf("expected failure count to reset, got %d", state.FailureCount)
+	}
+	if state.NextRetry.After(time.Now()) {
+		t.Fatalf("expected retry to be immediately available, got %v", state.NextRetry)
+	}
+	nodeMapMu.RLock()
+	node := cloneNode(NodeMap[nodeID])
+	nodeMapMu.RUnlock()
+	if node.ConnectionError != "" || node.ConnectionErrorCode != "" || node.ConnectionErrorAt != nil {
+		t.Fatalf("expected a successful sample to clear the connection error, got %q (%q) at %v",
+			node.ConnectionError, node.ConnectionErrorCode, node.ConnectionErrorAt)
+	}
+}
+
+func TestConnectionFailureCountIdentifiesFirstFailure(t *testing.T) {
+	nodeID := uint64(49)
+	retryMutex.Lock()
+	delete(retryStates, nodeID)
+	retryMutex.Unlock()
+	t.Cleanup(func() {
+		retryMutex.Lock()
+		delete(retryStates, nodeID)
+		retryMutex.Unlock()
+	})
+
+	if count := markConnectionFailure(nodeID, context.DeadlineExceeded); count != 1 {
+		t.Fatalf("first failure count = %d, want 1", count)
+	}
+	if count := markConnectionFailure(nodeID, context.DeadlineExceeded); count != 2 {
+		t.Fatalf("second failure count = %d, want 2", count)
+	}
+}
+
+func TestEqualNodeConfigsDetectsConnectionChanges(t *testing.T) {
+	base := []*model.Node{
+		{Model: model.Model{ID: 1}, Name: "node-a", URL: "https://node-a.example", EncryptedLegacySecret: []byte("token-a"), Enabled: true},
+		{Model: model.Model{ID: 2}, Name: "node-b", URL: "https://node-b.example", EncryptedLegacySecret: []byte("token-b"), Enabled: true},
+	}
+	reordered := []*model.Node{base[1], base[0]}
+	if !equalNodeConfigs(base, reordered) {
+		t.Fatal("expected node ordering not to trigger a monitor reload")
+	}
+
+	changedCredential := []*model.Node{
+		base[0],
+		{Model: model.Model{ID: 2}, Name: "node-b", URL: "https://node-b.example", EncryptedLegacySecret: []byte("rotated-token"), Enabled: true},
+	}
+	if equalNodeConfigs(base, changedCredential) {
+		t.Fatal("expected a credential change to trigger a monitor reload")
 	}
 }

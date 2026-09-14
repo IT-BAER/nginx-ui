@@ -29,23 +29,24 @@ var envPrefixMap = map[string]interface{}{
 	"APP":    settings.AppSettings,
 	"SERVER": settings.ServerSettings,
 	// Nginx UI
-	"DB":         DatabaseSettings,
-	"AUTH":       AuthSettings,
-	"CASDOOR":    CasdoorSettings,
-	"CERT":       CertSettings,
-	"CLUSTER":    ClusterSettings,
-	"CRYPTO":     CryptoSettings,
-	"HTTP":       HTTPSettings,
-	"LOGROTATE":  LogrotateSettings,
-	"NGINX":      NginxSettings,
-	"NGINX_LOG":  NginxLogSettings,
-	"NODE":       NodeSettings,
-	"OPENAI":     OpenAISettings,
-	"SITE_CHECK": SiteCheckSettings,
-	"TERMINAL":   TerminalSettings,
-	"WEBAUTHN":   WebAuthnSettings,
-	"BACKUP":     BackupSettings,
-	"OIDC":       OIDCSettings,
+	"DB":             DatabaseSettings,
+	"AUTH":           AuthSettings,
+	"CASDOOR":        CasdoorSettings,
+	"CERT":           CertSettings,
+	"CLUSTER":        ClusterSettings,
+	"CRYPTO":         CryptoSettings,
+	"HTTP":           HTTPSettings,
+	"LOGROTATE":      LogrotateSettings,
+	"NGINX":          NginxSettings,
+	"NGINX_LOG":      NginxLogSettings,
+	"NODE":           NodeSettings,
+	"OPENAI":         OpenAISettings,
+	"SITE_CHECK":     SiteCheckSettings,
+	"UPSTREAM_CHECK": UpstreamCheckSettings,
+	"TERMINAL":       TerminalSettings,
+	"WEBAUTHN":       WebAuthnSettings,
+	"BACKUP":         BackupSettings,
+	"OIDC":           OIDCSettings,
 }
 
 func init() {
@@ -67,6 +68,7 @@ func init() {
 	sections.Set("node", NodeSettings)
 	sections.Set("openai", OpenAISettings)
 	sections.Set("site_check", SiteCheckSettings)
+	sections.Set("upstream_check", UpstreamCheckSettings)
 	sections.Set("terminal", TerminalSettings)
 	sections.Set("webauthn", WebAuthnSettings)
 
@@ -93,7 +95,7 @@ func Init(confPath string) {
 
 	// if in official docker, set the restart cmd of nginx to "nginx -s stop",
 	// then the supervisor of s6-overlay will start the nginx again.
-	if helper.InNginxUIOfficialDocker() {
+	if helper.InNginxUIOfficialDocker() && NginxSettings.RestartCmd == "" {
 		NginxSettings.RestartCmd = "nginx -s stop"
 	}
 
@@ -103,6 +105,10 @@ func Init(confPath string) {
 
 	if AuthSettings.MaxAttempts <= 0 {
 		AuthSettings.MaxAttempts = 10
+	}
+
+	if AuthSettings.SecureSessionTimeoutMinutes <= 0 {
+		AuthSettings.SecureSessionTimeoutMinutes = DefaultSecureSessionTimeoutMinutes
 	}
 }
 
