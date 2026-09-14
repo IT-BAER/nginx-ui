@@ -42,7 +42,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ^1.26.1
+          go-version-file: go.mod
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
@@ -59,19 +59,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: current
+          bun-version: 1.4.2
 
       - name: Install dependencies
-        run: |
-          corepack enable
-          corepack prepare pnpm@latest --activate
-          pnpm install
+        run: bun ci
 
       - name: Lint
-        run: pnpm lint
+        run: bun run lint
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: bun run typecheck
